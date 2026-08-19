@@ -80,42 +80,76 @@ class Driver(models.Model):
         REJECTED = 'Rejected', 'Rejected'
 
     id = models.CharField(primary_key=True, max_length=50, default=generate_uuid)
+    
+    # Required fields
     full_name = models.CharField(max_length=100)
-    email = models.EmailField(max_length=150, unique=True)
     phone_number = models.CharField(max_length=20, unique=True, db_index=True)
+    
+    # Make email nullable (for temporary drivers)
+    email = models.EmailField(max_length=150, unique=True, null=True, blank=True)
+    
+    # OTP Fields
+    otp_code = models.CharField(max_length=6, blank=True, null=True)
+    otp_created_at = models.DateTimeField(blank=True, null=True)
+
+    # Vehicle Details
     vehicle_category = models.CharField(
-        max_length=20, choices=VehicleCategory.choices
+        max_length=20, choices=VehicleCategory.choices, null=True, blank=True
     )
-    vehicle_model = models.CharField(max_length=100)
-    vehicle_number = models.CharField(max_length=50, unique=True, db_index=True)
+    vehicle_model = models.CharField(max_length=100, null=True, blank=True)
+    vehicle_number = models.CharField(max_length=50, unique=True, db_index=True, null=True, blank=True)
+    
+    # ✅ NEW: Registration Certificate (RC)
+    registration_certificate = models.CharField(
+        max_length=50, 
+        unique=True, 
+        null=True, 
+        blank=True,
+        help_text="Vehicle Registration Certificate (RC) Number"
+    )
+    
+    # ✅ NEW: RC document image/upload (if you need to store the file)
+    registration_certificate_image = models.ImageField(
+        upload_to='driver_documents/rc/',
+        null=True,
+        blank=True,
+        help_text="Upload Registration Certificate image"
+    )
+    
     kyc_status = models.CharField(
         max_length=20, choices=KYCStatus.choices, default=KYCStatus.PENDING
     )
+
     is_online = models.BooleanField(default=False, db_index=True)
     wallet_balance = models.DecimalField(
         max_digits=10, decimal_places=2, default=0.00
     )
+
     total_earnings = models.DecimalField(
         max_digits=12, decimal_places=2, default=0.00
     )
+
     rating = models.DecimalField(max_digits=3, decimal_places=2, default=5.00)
     current_lat = models.DecimalField(
         max_digits=10, decimal_places=8, null=True, blank=True
     )
+
     current_lng = models.DecimalField(
         max_digits=11, decimal_places=8, null=True, blank=True
     )
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = 'drivers'
         indexes = [
             models.Index(fields=['is_online', 'kyc_status']),
+            models.Index(fields=['registration_certificate']),  # ✅ Index for RC
         ]
 
     def __str__(self):
-        return f'{self.full_name} ({self.vehicle_number})'
-
+        return f'{self.full_name} ({self.vehicle_number or "No Vehicle"})'
+    
 
 # 4. Vehicle Documents
 class VehicleDocument(models.Model):

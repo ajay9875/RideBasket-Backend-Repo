@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     # Third-party apps
     'corsheaders',
+    'rest_framework',
     # Your custom app
     'rides',
 ]
