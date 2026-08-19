@@ -631,7 +631,7 @@ def verify_auth_otp_view(request):
             'code': 'NO_OTP_REQUESTED'
         }, status=status.HTTP_400_BAD_REQUEST)
     
-    if driver.otp_code != otp:
+    if str(driver.otp_code) != str(otp):
         logger.warning(f"Verify OTP failed: Invalid OTP for {phone}")
         return Response({
             'success': False,

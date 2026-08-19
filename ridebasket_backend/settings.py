@@ -4,6 +4,7 @@ Django settings for ridebasket_backend project.
 
 from pathlib import Path
 from decouple import config, Csv
+import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -17,10 +18,27 @@ DEBUG = config('DEBUG', default=True, cast=bool)
 
 # For deployment on PythonAnywhere or other platforms, you can set ALLOWED_HOSTS in the .env file.
 ALLOWED_HOSTS = config(
-    'ALLOWED_HOSTS', 
-    default='127.0.0.1,localhost', 
+    'ALLOWED_HOSTS',
+    default='127.0.0.1,localhost',
     cast=Csv()
 )
+
+# ✅ Add or update these settings
+
+# Static files (CSS, JavaScript, Images)
+STATIC_URL = '/static/'
+
+# ✅ This is the directory where collectstatic will gather files
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')  # or 'static'
+
+# Additional directories for static files (optional)
+STATICFILES_DIRS = [
+    os.path.join(BASE_DIR, 'static'),
+]
+
+# Media files (User uploaded files)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 # Application definition
 INSTALLED_APPS = [
