@@ -11,7 +11,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 SECRET_KEY = config('SECRET_KEY', default='django-insecure-c&vcaz^t5=rjd14#nse6kf8#mr7-$qak%2umziy2zl)8^1_94f')
 DEBUG = config('DEBUG', default=True, cast=bool)
+
 # If ALLOWED_HOSTS isn't set in .env, default to localhost & 127.0.0.1
+# Option A: Use config with all hosts
+
+# For deployment on PythonAnywhere or other platforms, you can set ALLOWED_HOSTS in the .env file.
 ALLOWED_HOSTS = config(
     'ALLOWED_HOSTS', 
     default='127.0.0.1,localhost', 
