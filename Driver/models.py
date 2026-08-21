@@ -37,7 +37,6 @@ class AdminUser(models.Model):
     def __str__(self):
         return f'{self.name} ({self.role})'
 
-
 # 2. Riders Table
 class Rider(models.Model):
     class Status(models.TextChoices):
@@ -47,7 +46,8 @@ class Rider(models.Model):
 
     id = models.CharField(primary_key=True, max_length=50, default=generate_uuid)
     full_name = models.CharField(max_length=100)
-    email = models.EmailField(max_length=150, unique=True)
+    # ✅ CHANGE THIS LINE - Add null=True, blank=True
+    email = models.EmailField(max_length=150, unique=True, null=True, blank=True)
     phone_number = models.CharField(max_length=20, unique=True, db_index=True)
     wallet_balance = models.DecimalField(
         max_digits=10, decimal_places=2, default=0.00
@@ -57,13 +57,16 @@ class Rider(models.Model):
         max_length=20, choices=Status.choices, default=Status.ACTIVE
     )
     created_at = models.DateTimeField(auto_now_add=True)
+    
+    # ✅ ADD OTP FIELDS (if not already present)
+    otp_code = models.CharField(max_length=6, null=True, blank=True)
+    otp_created_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = 'riders'
 
     def __str__(self):
         return self.full_name
-
 
 # 3. Drivers Table
 class Driver(models.Model):
@@ -250,6 +253,10 @@ class Ride(models.Model):
     otp_code = models.CharField(max_length=6, default='1234')
     sos_triggered = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    # ✅ ADD THESE OTP FIELDS
+    otp_code = models.CharField(max_length=6, null=True, blank=True)
+    otp_created_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = 'rides'

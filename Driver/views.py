@@ -5,11 +5,11 @@ from rest_framework.response import Response
 from rest_framework import status, viewsets
 from django.shortcuts import get_object_or_404
 
-from rides.models import (
+from Driver.models import (
     Driver, VehicleDocument, Ride,
     EarningsTransaction, AppNotification, ChatMessage
 )
-from rides.serializers import (
+from Driver.serializers import (
     DriverSerializer, VehicleDocumentSerializer, RideSerializer,
     EarningsTransactionSerializer, AppNotificationSerializer, ChatMessageSerializer
 )
@@ -56,7 +56,14 @@ from rest_framework import status
 from .models import Driver
 from .serializers import DriverSerializer
 
-
+# ============================================
+# ============================================
+# ============================================
+  #  All Customer Views are in customer/views.py
+# ============================================
+# ============================================
+# ============================================
+     
 # Setup logging
 logger = logging.getLogger(__name__)
 
@@ -194,7 +201,7 @@ def send_register_otp_view(request):
         
         # ----- 5. GENERATE AND SAVE OTP -----
         try:
-            otp_code = str(random.randint(1000, 9999))
+            otp_code = "1234" #str(random.randint(1000, 9999))
             logger.debug(f"Generated OTP: {otp_code} for {phone_number}")
             
             driver.otp_code = otp_code

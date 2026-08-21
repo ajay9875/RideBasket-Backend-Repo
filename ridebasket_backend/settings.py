@@ -52,7 +52,8 @@ INSTALLED_APPS = [
     'corsheaders',
     'rest_framework',
     # Your custom app
-    'rides',
+    'Driver',
+    'Customer',
 ]
 
 MIDDLEWARE = [
