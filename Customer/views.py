@@ -10,11 +10,17 @@ from django.conf import settings
 from decouple import config
 from Driver.models import Rider  # Updated from Driver to Rider
 from .serializers import RiderSerializer  # Updated from DriverSerializer to RiderSerializer
+from django.db import models  # ✅ ADD THIS IMPORT
+from django.db.models import Q  # ✅ OR add this if you prefer Q
 
 logger = logging.getLogger(__name__)
 
 # ============================================
 # ✅ SEND OTP - Customer Registration
+# ============================================
+
+# ============================================
+# ✅ SEND OTP - Customer Registration (COMPLETE)
 # ============================================
 @api_view(['POST'])
 def send_customer_register_otp_view(request):
@@ -27,6 +33,7 @@ def send_customer_register_otp_view(request):
         # ----- 1. VALIDATE INPUT -----
         phone = request.data.get('phone')
         name = request.data.get('name', '').strip()
+        email = request.data.get('email', '').strip()  # ✅ Get email from request
         
         if not phone:
             logger.warning("Send OTP failed: Phone number missing")
@@ -61,28 +68,63 @@ def send_customer_register_otp_view(request):
         # ----- 2. CLEANUP ORPHANED TEMP CUSTOMERS (OLDER THAN 24 HOURS) -----
         try:
             orphaned_customers = Rider.objects.filter(
-                email__isnull=True,  # No email set (temp customer)
-                created_at__lt=timezone.now() - timedelta(hours=24)  # Older than 24 hours
+                email__isnull=True,
+                otp_created_at__lt=timezone.now() - timedelta(hours=24)
             )
             orphaned_count = orphaned_customers.count()
             if orphaned_count > 0:
                 logger.info(f"🗑️ Deleting {orphaned_count} orphaned temp customers older than 24 hours")
                 orphaned_customers.delete()
         except Exception as cleanup_error:
-            logger.warning(f"Cleanup error: {cleanup_error}")  # Don't fail the request
+            logger.warning(f"Cleanup error: {cleanup_error}")
         
-        # ----- 3. CHECK IF CUSTOMER EXISTS -----
-        existing_customer = Rider.objects.filter(phone_number=phone_number).first()
+        # ----- 3. CHECK IF PHONE EXISTS WITH A REAL EMAIL -----
+        # First, check if the phone exists with a real email
+        existing_customer_with_phone = Rider.objects.filter(
+            phone_number=phone_number
+        ).exclude(
+            email__isnull=True
+        ).exclude(
+            email=''
+        ).first()
         
-        if existing_customer:
-            # ✅ Check if it's a temp customer (no email)
-            if existing_customer.email is None or existing_customer.email == '':
-                logger.info(f"📱 Reusing existing temp customer: {phone_number}")
-                customer = existing_customer
-                customer.full_name = name  # ✅ Update name
-                customer.save()
+        # ✅ If phone exists with a real email, check if it's the same email
+        if existing_customer_with_phone:
+            # If email is provided in the request
+            if email:
+                # Check if the email matches the existing customer's email
+                if existing_customer_with_phone.email == email:
+                    logger.warning(f"Registration failed: Phone and email already registered - {phone_number}")
+                    return Response({
+                        'success': False,
+                        'message': 'This phone and email are already registered. Please login.',
+                        'code': 'CUSTOMER_EXISTS',
+                        'exists': True
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                else:
+                    # ✅ Phone exists but with a DIFFERENT email - Allow registration!
+                    logger.info(f"📱 Phone {phone_number} exists with different email. Creating new customer.")
+                    # Check if the new email already exists
+                    if Rider.objects.filter(email=email).exists():
+                        return Response({
+                            'success': False,
+                            'message': 'This email is already registered with another account.',
+                            'code': 'EMAIL_EXISTS'
+                        }, status=status.HTTP_400_BAD_REQUEST)
+                    
+                    # Create a new customer with the same phone but different email
+                    customer = Rider.objects.create(
+                        phone_number=phone_number,
+                        full_name=name,
+                        email=email,
+                        wallet_balance=0.00,
+                        rating=5.00,
+                        status=Rider.Status.ACTIVE
+                    )
+                    logger.info(f"✅ New customer created with existing phone: {phone_number}")
+                    # Skip OTP, go directly to OTP generation
             else:
-                # ✅ Real registered customer
+                # No email provided, phone exists with real email
                 logger.warning(f"Registration failed: Phone already registered - {phone_number}")
                 return Response({
                     'success': False,
@@ -91,48 +133,56 @@ def send_customer_register_otp_view(request):
                     'exists': True
                 }, status=status.HTTP_400_BAD_REQUEST)
         else:
-            # ----- 4. CREATE TEMPORARY CUSTOMER -----
-            try:
-                customer = Rider.objects.create(
-                    phone_number=phone_number,
-                    full_name=name,
-                    email=None,  # Will be set during final registration
-                    wallet_balance=0.00,
-                    rating=5.00,
-                    status=Rider.Status.PENDING
-                )
-                logger.info(f"✅ New temp customer created: {phone_number} - {name}")
-                    
-            except Exception as db_error:
-                logger.error(f"Database error while creating customer: {str(db_error)}")
-                return Response({
-                    'success': False,
-                    'message': 'Unable to process your request. Please try again.',
-                    'code': 'DATABASE_ERROR'
-                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            # ----- 4. CHECK IF PHONE EXISTS AS TEMP CUSTOMER -----
+            existing_temp_customer = Rider.objects.filter(
+                phone_number=phone_number,
+                email__isnull=True
+            ).first()
+            
+            if existing_temp_customer:
+                logger.info(f"📱 Reusing existing temp customer: {phone_number}")
+                customer = existing_temp_customer
+                customer.full_name = name
+                customer.save()
+            else:
+                # ----- 5. CREATE TEMPORARY CUSTOMER -----
+                try:
+                    customer = Rider.objects.create(
+                        phone_number=phone_number,
+                        full_name=name,
+                        email=None,  # Will be set during final registration
+                        wallet_balance=0.00,
+                        rating=5.00,
+                        status=Rider.Status.PENDING
+                    )
+                    logger.info(f"✅ New temp customer created: {phone_number} - {name}")
+                        
+                except Exception as db_error:
+                    logger.error(f"Database error while creating customer: {str(db_error)}")
+                    return Response({
+                        'success': False,
+                        'message': 'Unable to process your request. Please try again.',
+                        'code': 'DATABASE_ERROR'
+                    }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
-        # ----- 5. GENERATE AND SAVE OTP -----
+        # ----- 6. GENERATE AND SAVE OTP -----
         try:
-            # For customer, use same OTP system
-            otp_code = "1234"  # For testing purposes only
+            otp_code = "1234"
             # otp_code = str(random.randint(1000, 9999))
             logger.debug(f"Generated OTP: {otp_code} for {phone_number}")
             
-            # You may need to add OTP fields to Rider model
             customer.otp_code = otp_code
             customer.otp_created_at = timezone.now()
             customer.save()
             
             logger.info(f"✅ OTP saved for: {phone_number}")
 
-            # -----------------  Temperary Bypass   --------------------
             return Response({
                 'success': True,
                 'message': 'OTP sent successfully.',
-                'debug_otp': str(otp_code),
+                'debug_otp': otp_code,
                 'code': 'OTP_SENT',
             }, status=status.HTTP_200_OK)
-            # ----------------------------------------------------------
                 
         except Exception as db_error:
             logger.error(f"Database error while saving OTP: {str(db_error)}")
@@ -142,8 +192,8 @@ def send_customer_register_otp_view(request):
                 'code': 'DATABASE_ERROR'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # ----- 6. SEND SMS (BYPASSED FOR NOW) -----
-        # ... (same SMS logic as driver)
+        # ----- 7. SEND SMS (BYPASSED FOR NOW) -----
+        # ... (SMS logic remains the same)
         
     except Exception as e:
         logger.error(f"💥 Unexpected error in send_customer_register_otp_view: {str(e)}", exc_info=True)
@@ -153,6 +203,101 @@ def send_customer_register_otp_view(request):
             'code': 'INTERNAL_ERROR'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+# ============================================
+# ✅ VERIFY OTP - Customer (Login/Registration)
+# ============================================
+# views.py - Add this function
+@api_view(['POST'])
+def verify_customer_register_otp_view(request):
+    """
+    Verify OTP for Registration flow only.
+    """
+    phone = request.data.get('phone')
+    otp = request.data.get('otp')
+    
+    if not phone or not otp:
+        return Response({
+            'success': False,
+            'message': 'Phone and OTP are required',
+            'code': 'MISSING_FIELDS'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    phone = str(phone).strip().replace("+", "")
+    otp = str(otp).strip()
+    
+    if not otp.isdigit() or len(otp) != 4:
+        return Response({
+            'success': False,
+            'message': 'Invalid OTP format. Please enter a 4-digit OTP.',
+            'code': 'INVALID_OTP_FORMAT'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    logger.info(f"🔍 Verifying Registration OTP for: {phone}")
+    
+    customer = Rider.objects.filter(phone_number=phone).first()
+    
+    if not customer:
+        return Response({
+            'success': False,
+            'message': 'Customer not found. Please register first.',
+            'code': 'CUSTOMER_NOT_FOUND'
+        }, status=status.HTTP_404_NOT_FOUND)
+    
+    # ✅ Check: Must be a temp customer (email is None or starts with 'temp_')
+    if customer.email is not None and customer.email != '' and not customer.email.startswith('temp_'):
+        return Response({
+            'success': False,
+            'message': 'Phone number already registered. Please login instead.',
+            'code': 'ALREADY_REGISTERED'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Check OTP
+    if not customer.otp_code:
+        return Response({
+            'success': False,
+            'message': 'No OTP requested. Please request OTP first.',
+            'code': 'NO_OTP_REQUESTED'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    if str(customer.otp_code) != str(otp):
+        return Response({
+            'success': False,
+            'message': 'Invalid OTP. Please try again.',
+            'code': 'INVALID_OTP'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Check OTP expiry (5 minutes)
+    if customer.otp_created_at:
+        expiry_time = customer.otp_created_at + timedelta(minutes=5)
+        if timezone.now() > expiry_time:
+            return Response({
+                'success': False,
+                'message': 'OTP has expired. Please request a new OTP.',
+                'code': 'OTP_EXPIRED'
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Clear OTP
+    customer.otp_code = None
+    customer.otp_created_at = None
+    customer.save()
+    
+    logger.info(f"✅ Registration OTP verified for {phone}")
+    
+    customer_data = {
+        'id': customer.id,
+        'full_name': customer.full_name,
+        'email': customer.email if customer.email else "",
+        'phone_number': customer.phone_number,
+        'wallet_balance': str(customer.wallet_balance),
+        'rating': str(customer.rating),
+        'status': customer.status
+    }
+    
+    return Response({
+        'success': True,
+        'message': 'OTP verified successfully',
+        'customer': customer_data
+    }, status=status.HTTP_200_OK)
 
 # ============================================
 # ✅ REGISTER CUSTOMER - Complete Registration
@@ -192,16 +337,20 @@ def register_customer_view(request):
         
         # ✅ Check if customer already exists by phone or email
         existing_customer = Rider.objects.filter(
-            Q(phone_number=phone_number) | Q(email=email)
+            models.Q(phone_number=phone_number) | models.Q(email=email)
         ).first()
         
         if existing_customer:
-            # ✅ If it's a temp customer (no email), update it instead of returning error
-            if existing_customer.phone_number == phone_number and (existing_customer.email is None or existing_customer.email == ''):
+            # ✅ If it's a temp customer (email starts with temp_ or is None), update it
+            if existing_customer.phone_number == phone_number and (
+                existing_customer.email is None or 
+                existing_customer.email == '' or 
+                existing_customer.email.startswith('temp_')
+            ):
                 # ✅ Update temp customer with all details
                 logger.info(f"📝 Updating temp customer: {phone_number}")
                 existing_customer.full_name = full_name
-                existing_customer.email = email
+                existing_customer.email = email  # ✅ Set real email
                 existing_customer.status = Rider.Status.ACTIVE
                 existing_customer.save()
                 
@@ -262,15 +411,14 @@ def register_customer_view(request):
             'message': f"An unexpected error occurred during registration: {str(e)}"
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-
 # ============================================
-# ✅ SEND OTP - Customer Login (NO AUTO-CREATION)
+ # Send OTP - Customer Login
 # ============================================
 @api_view(['POST'])
 def send_customer_login_otp_view(request):
     """
     Send OTP to the provided phone number for login.
-    ONLY allows existing customers. Does NOT create new customers.
+    Auto-creates customer if not exists (FOR TESTING ONLY).
     """
     try:
         # ----- 1. VALIDATE INPUT -----
@@ -298,27 +446,32 @@ def send_customer_login_otp_view(request):
         logger.info(f"📤 Customer Login OTP request for: {phone_number}")
         
         # ----- 2. CHECK IF CUSTOMER EXISTS -----
-        try:
-            customer = Rider.objects.filter(phone_number=phone_number).first()
-            
-            if not customer:
-                logger.warning(f"Login failed: Customer not found - {phone_number}")
-                return Response({
-                    'success': False,
-                    'message': 'Account not found. Please register first.',
-                    'code': 'CUSTOMER_NOT_FOUND'
-                }, status=status.HTTP_404_NOT_FOUND)
-                
-        except Exception as db_error:
-            logger.error(f"Database error while checking customer: {str(db_error)}")
+        customer = Rider.objects.filter(phone_number=phone_number).first()
+        
+        # ✅ Auto-create for testing if not exists
+        if not customer:
+            logger.info(f"🔄 Auto-creating customer: {phone_number}")
+            customer = Rider.objects.create(
+                phone_number=phone_number,
+                full_name=f"User_{phone_number}",
+                email=f"{phone_number}@temp.com",
+                wallet_balance=0.00,
+                rating=5.00,
+                status=Rider.Status.ACTIVE
+            )
+            logger.info(f"✅ Auto-created customer: {phone_number}")
+        
+        # ✅ Check if customer is fully registered (has real email, not temp)
+        if customer.email is None or customer.email == '' or customer.email.startswith('temp_'):
+            logger.warning(f"Login failed: Registration incomplete for {phone_number}")
             return Response({
                 'success': False,
-                'message': 'Unable to process your request. Please try again.',
-                'code': 'DATABASE_ERROR'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                'message': 'Please complete your registration first.',
+                'code': 'REGISTRATION_INCOMPLETE'
+            }, status=status.HTTP_400_BAD_REQUEST)
         
         # ----- 3. GENERATE OTP -----
-        otp_code = random.randint(1000, 9999)
+        otp_code = "1234" #random.randint(1000, 9999)
         logger.debug(f"Generated OTP: {otp_code} for {phone_number}")
         
         # ----- 4. SAVE OTP TO DATABASE -----
@@ -326,9 +479,9 @@ def send_customer_login_otp_view(request):
             customer.otp_code = otp_code
             customer.otp_created_at = timezone.now()
             customer.save()
-            logger.info(f"✅ OTP updated for existing customer: {phone_number}")
+            logger.info(f"✅ OTP updated for customer: {phone_number}")
 
-            # -----------------  Temperary Bypass   --------------------
+            # -----------------  Temporary Bypass   --------------------
             return Response({
                 'success': True,
                 'message': 'OTP sent successfully.',
@@ -346,7 +499,7 @@ def send_customer_login_otp_view(request):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         # ----- 5. SEND SMS (BYPASSED FOR NOW) -----
-        # ... (same SMS logic as driver)
+        # ... (SMS logic if needed)
         
     except Exception as e:
         logger.error(f"💥 Unexpected error in send_customer_login_otp_view: {str(e)}", exc_info=True)
@@ -356,27 +509,15 @@ def send_customer_login_otp_view(request):
             'code': 'INTERNAL_ERROR'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-
 # ============================================
-# ✅ VERIFY OTP - Customer (Login/Registration)
-# ============================================
+# views.py - Add this function
 @api_view(['POST'])
-def verify_customer_auth_otp_view(request):
+def verify_customer_login_otp_view(request):
     """
-    Verify OTP for both Login and Registration flows for customers.
-    
-    For Login: 
-        - Verifies OTP for existing customers only
-        - Returns customer data for login session
-    
-    For Registration:
-        - Verifies OTP for temp customers only
-        - Returns customer data to proceed with registration
+    Verify OTP for Login flow only.
     """
-    # ----- 1. GET AND VALIDATE INPUT -----
     phone = request.data.get('phone')
     otp = request.data.get('otp')
-    flow = request.data.get('flow', 'Login')  # ✅ Get flow type (login/registration)
     
     if not phone or not otp:
         return Response({
@@ -385,11 +526,9 @@ def verify_customer_auth_otp_view(request):
             'code': 'MISSING_FIELDS'
         }, status=status.HTTP_400_BAD_REQUEST)
     
-    # Clean phone number
     phone = str(phone).strip().replace("+", "")
     otp = str(otp).strip()
     
-    # Validate OTP format (4 digits)
     if not otp.isdigit() or len(otp) != 4:
         return Response({
             'success': False,
@@ -397,53 +536,27 @@ def verify_customer_auth_otp_view(request):
             'code': 'INVALID_OTP_FORMAT'
         }, status=status.HTTP_400_BAD_REQUEST)
     
-    logger.info(f"🔍 Verifying OTP for customer: {phone} (Flow: {flow})")
+    logger.info(f"🔍 Verifying Login OTP for: {phone}")
     
-    # ----- 2. FIND CUSTOMER -----
     customer = Rider.objects.filter(phone_number=phone).first()
+    
     if not customer:
-        logger.warning(f"Verify OTP failed: Customer not found - {phone}")
         return Response({
             'success': False,
-            'message': 'Customer not found. Please register first.',
+            'message': 'Account not found. Please register first.',
             'code': 'CUSTOMER_NOT_FOUND'
         }, status=status.HTTP_404_NOT_FOUND)
     
-    # ----- 3. FLOW-SPECIFIC CHECKS -----
-    
-    # ✅ For LOGIN flow: Customer must be a real registered customer (email exists)
-    if flow == 'Login':
-        if customer.email is None or customer.email == '':
-            logger.warning(f"Login failed: Registration incomplete for {phone}")
-            return Response({
-                'success': False,
-                'message': 'Please complete your registration first.',
-                'code': 'REGISTRATION_INCOMPLETE'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        logger.info(f"📱 Customer Login OTP verification for: {phone}")
-    
-    # ✅ For REGISTRATION flow: Customer must be a temp customer (email is None)
-    elif flow == 'Registration':
-        if customer.email is not None and customer.email != '':
-            logger.warning(f"Registration failed: Phone already registered - {phone}")
-            return Response({
-                'success': False,
-                'message': 'Phone number already registered. Please login instead.',
-                'code': 'ALREADY_REGISTERED'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        logger.info(f"📝 Customer Registration OTP verification for: {phone}")
-
-    else:
-        logger.warning(f"Verify OTP failed: Invalid flow type - {flow}")
+    # ✅ Check: Must be fully registered (not temp)
+    if customer.email is None or customer.email == '' or customer.email.startswith('temp_'):
         return Response({
             'success': False,
-            'message': 'Invalid flow type. Must be either "Login" or "Registration".',
-            'code': 'INVALID_FLOW'
+            'message': 'Please complete your registration first.',
+            'code': 'REGISTRATION_INCOMPLETE'
         }, status=status.HTTP_400_BAD_REQUEST)
     
-    # ----- 4. CHECK OTP -----
+    # Check OTP
     if not customer.otp_code:
-        logger.warning(f"Verify OTP failed: No OTP requested for {phone}")
         return Response({
             'success': False,
             'message': 'No OTP requested. Please request OTP first.',
@@ -451,35 +564,41 @@ def verify_customer_auth_otp_view(request):
         }, status=status.HTTP_400_BAD_REQUEST)
     
     if str(customer.otp_code) != str(otp):
-        logger.warning(f"Verify OTP failed: Invalid OTP for {phone}")
         return Response({
             'success': False,
             'message': 'Invalid OTP. Please try again.',
             'code': 'INVALID_OTP'
         }, status=status.HTTP_400_BAD_REQUEST)
     
-    # ----- 5. CHECK OTP EXPIRY (5 minutes) -----
+    # Check OTP expiry (5 minutes)
     if customer.otp_created_at:
         expiry_time = customer.otp_created_at + timedelta(minutes=5)
         if timezone.now() > expiry_time:
-            logger.warning(f"Verify OTP failed: OTP expired for {phone}")
             return Response({
                 'success': False,
                 'message': 'OTP has expired. Please request a new OTP.',
                 'code': 'OTP_EXPIRED'
             }, status=status.HTTP_400_BAD_REQUEST)
     
-    # ----- 6. CLEAR OTP AND SAVE -----
+    # Clear OTP
     customer.otp_code = None
     customer.otp_created_at = None
     customer.save()
     
-    logger.info(f"✅ OTP verified successfully for {phone} (Flow: {flow})")
+    logger.info(f"✅ Login OTP verified for {phone}")
     
-    # ----- 7. RETURN RESPONSE -----
+    customer_data = {
+        'id': customer.id,
+        'full_name': customer.full_name,
+        'email': customer.email,
+        'phone_number': customer.phone_number,
+        'wallet_balance': str(customer.wallet_balance),
+        'rating': str(customer.rating),
+        'status': customer.status
+    }
+    
     return Response({
         'success': True,
         'message': 'OTP verified successfully',
-        'flow': flow,  # ✅ Return flow for client reference
-        'customer': RiderSerializer(customer).data
+        'customer': customer_data
     }, status=status.HTTP_200_OK)
